@@ -1,0 +1,141 @@
+version: 0.2
+
+env:
+  variables:
+    OPA_VERSION: "${OPA_VERSION}"
+    REGION: "${REGION}"
+    POLICY_BUCKET: "${POLICY_BUCKET}"
+    NOTIFICATION_EMAIL: "${NOTIFICATION_EMAIL}"
+    SNS_TOPIC_ARN: "${SNS_TOPIC_ARN}"
+    POLICY_VIOLATION: "false"  # Variable to track violations
+
+phases:
+  install:
+    commands:
+      - curl -L -o opa "https://github.com/open-policy-agent/opa/releases/download/v$${OPA_VERSION}/opa_linux_amd64"
+      - chmod 755 opa
+      - mv opa /usr/local/bin/
+      - |
+        if ! command -v aws &> /dev/null; then
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install
+        fi
+      - |
+        if ! command -v jq &> /dev/null; then
+          if [ -f /etc/os-release ] && grep -q "ID=ubuntu" /etc/os-release; then 
+            apt-get update && apt-get install -y jq
+          elif [ -f /etc/os-release ] && grep -q "ID=amzn" /etc/os-release; then 
+            yum install -y jq
+          else 
+            (which apt-get && apt-get update && apt-get install -y jq) || 
+            (which yum && yum install -y jq)
+          fi
+        fi
+      - |
+        if ! command -v curl &> /dev/null; then
+          if [ -f /etc/os-release ] && grep -q "ID=ubuntu" /etc/os-release; then 
+            apt-get update && apt-get install -y curl
+          elif [ -f /etc/os-release ] && grep -q "ID=amzn" /etc/os-release; then 
+            yum install -y curl
+          else 
+            (which apt-get && apt-get update && apt-get install -y curl) || 
+            (which yum && yum install -y curl)
+          fi
+        fi
+
+  pre_build:
+    commands:
+      - aws s3 sync "s3://$${POLICY_BUCKET}/policies/" ./policies/
+      - ls -la ./policies/
+      - touch opa-violations.txt
+      - echo '[]' > opa-results.json
+
+  build:
+    commands:
+      - |
+        if [ -f tfplan.json ]; then
+          echo "Running OPA policy evaluation against terraform plan..."
+          
+          # First, try to parse and check if all policies are valid
+          echo "Validating OPA policy syntax..."
+          if ! opa check ./policies/*.rego 2>/dev/null; then
+            echo "Error: Invalid OPA policy syntax detected"
+            opa check ./policies/*.rego
+            export POLICY_VIOLATION="true"
+            NOTIFICATION_MSG="Build $${CODEBUILD_BUILD_ID} failed: Invalid OPA policy syntax detected"
+            echo "$${NOTIFICATION_MSG}" > notification-message.txt
+            exit 1
+          fi
+          
+          # Generate the violations text in readable format
+          echo "Evaluating terraform plan against policies..."
+          opa eval --format pretty --data ./policies/ --input tfplan.json "data.policies.deny" > opa-violations.txt
+          
+          # Also generate structured JSON results for reports
+          opa eval --format json --data ./policies/ --input tfplan.json "data.policies.deny" > opa-results.json
+          
+          # Check if violations exist by parsing the JSON output
+          if [ -s opa-violations.txt ] && [ "$(cat opa-violations.txt)" != "{}" ] && [ "$(cat opa-results.json)" != "{}" ]; then
+            echo "Policy violations found! Details:"
+            cat opa-violations.txt
+            export POLICY_VIOLATION="true"
+            
+            # Parse violation details more reliably
+            VIOLATIONS=$(jq -r 'keys | join(", ")' opa-results.json 2>/dev/null || echo "Format error in policy results")
+            
+            # Create notification message
+            NOTIFICATION_MSG="OPA Policy Violations detected in build $${CODEBUILD_BUILD_ID}. Policies breached: $${VIOLATIONS}. Artifacts available at s3://$${POLICY_BUCKET}/$${CODEBUILD_BUILD_ID}/"
+            echo "$${NOTIFICATION_MSG}" > notification-message.txt
+          else
+            echo "No policy violations found. Compliance check passed."
+          fi
+        else
+          echo "Error: No tfplan.json file found from previous stage"
+          export POLICY_VIOLATION="true"
+          
+          # Create notification message for missing tfplan
+          NOTIFICATION_MSG="Build $${CODEBUILD_BUILD_ID} failed: No tfplan.json file found from previous stage."
+          echo "$${NOTIFICATION_MSG}" > notification-message.txt
+        fi
+
+  post_build:
+    commands:
+      - aws s3 cp opa-results.json s3://$${POLICY_BUCKET}/$(date +%Y-%m-%d-%H-%M-%S)/opa-results.json || echo "Failed to upload opa-results.json"
+      - aws s3 cp opa-violations.txt s3://$${POLICY_BUCKET}/$(date +%Y-%m-%d-%H-%M-%S)/opa-violations.txt || echo "Failed to upload opa-violations.txt"
+      - |
+        # Send SNS notification if violations were found
+        if [ "$${POLICY_VIOLATION}" = "true" ] && [ -f notification-message.txt ]; then
+          echo "Sending SNS notification for policy violations"
+          NOTIFICATION_MSG=$(cat notification-message.txt)
+          
+          # Use AWS SNS to publish notification
+          aws sns publish \
+            --region $${REGION} \
+            --topic-arn "$${SNS_TOPIC_ARN}" \
+            --subject "OPA Policy Violations - Build $${CODEBUILD_BUILD_ID}" \
+            --message "$${NOTIFICATION_MSG}"
+            
+          echo "SNS notification sent successfully"
+        fi
+      - |
+        # Check if we need to fail the build
+        if [ "$${POLICY_VIOLATION}" = "true" ]; then
+          echo "Failing build due to policy violations"
+          exit 1
+        else
+          echo "Compliance check passed successfully"
+        fi
+
+reports:
+  opa-compliance:
+    files:
+      - opa-results.json
+    base-directory: ./
+    file-format: JSON
+
+artifacts:
+  files:
+    - opa-results.json
+    - opa-violations.txt
+  base-directory: ./

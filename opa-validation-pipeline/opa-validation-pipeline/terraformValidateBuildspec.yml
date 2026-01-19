@@ -1,0 +1,44 @@
+version: 0.2
+
+env:
+  variables:
+    TERRAFORM_VERSION: "${TERRAFORM_VERSION}"
+    REGION: ${region}
+
+phases:
+  install:
+    commands:
+      - echo "Installing Terraform..."
+      - curl -s -qL -o terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform --version
+  
+  pre_build:
+    commands:
+      - echo "Terraform validation started on `date`"
+      - echo "Initializing Terraform..."
+      - terraform init
+  
+  build:
+    commands:
+      - echo "Running Terraform validation..."
+      - terraform validate
+      
+  post_build:
+    commands:
+      - echo "Terraform validation completed on `date`"
+
+reports:
+  terraform-validate:
+    files:
+      - terraform-validate-report.json
+    base-directory: ./
+    file-format: JSON
+    
+artifacts:
+  files:
+    - terraform-validate-report.json
+    - .terraform.lock.hcl
+    - terraform.tfstate
+  base-directory: ./

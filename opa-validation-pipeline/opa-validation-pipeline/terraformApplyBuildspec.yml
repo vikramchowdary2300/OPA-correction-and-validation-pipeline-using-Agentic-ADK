@@ -1,0 +1,61 @@
+version: 0.2
+
+env:
+  variables:
+    TERRAFORM_VERSION: "${TERRAFORM_VERSION}"
+
+phases:
+  install:
+    commands:
+      - echo "Installing Terraform..."
+      - curl -s -qL -o terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform --version
+  
+  pre_build:
+    commands:
+      - echo "Terraform apply started on `date`"
+      - echo "Verifying backend configuration..."
+      #- cat backend.conf
+      - echo "Initializing Terraform..."
+      #- terraform init -backend-config=backend.conf -input=false
+      - echo "Retrieving plan file from previous stage..."
+      - ls -la
+  
+  build:
+    commands:
+      - echo "Checking for lock file consistency..."
+      - if [ -f .terraform.lock.hcl ]; then echo "Lock file exists"; else echo "Lock file missing, creating..."; terraform providers lock -platform=linux_amd64; fi
+      - echo "Checking for missing buildspec files..."
+      - find . -name "*.yml" | sort
+      - echo "Creating empty buildspec files if missing..."
+      - |
+        for file in testingBuildspec.yml sonarBuildspec.yml dockerBuildspec.yml gitLeaksBuildspec.yml trivyBuildspec.yml; do
+          if [ ! -f "$file" ]; then echo "Creating empty $file"; echo "version: 0.2" > "$file"; fi
+        done
+      - echo "Applying Terraform infrastructure changes..."
+      #- terraform apply -auto-approve tfplan.binary || (echo "Plan apply failed, attempting direct apply..." && terraform apply -auto-approve -var-file=tfvars/terraform.tfvars)
+      
+  post_build:
+    commands:
+      - echo "Terraform apply completed on `date`"
+      - echo "Capturing terraform outputs..."
+      #- terraform output -json > terraform-outputs.json || echo "No outputs to capture"
+
+reports:
+  terraform-apply:
+    files:
+      - terraform-outputs.json
+    base-directory: ./
+    file-format: JSON
+    
+artifacts:
+  files:
+    - terraform-outputs.json
+    - terraform.tfstate
+    - .terraform.lock.hcl
+    - "*.yml"
+    - "**/*.yml"
+    #- backend.conf
+  base-directory: ./

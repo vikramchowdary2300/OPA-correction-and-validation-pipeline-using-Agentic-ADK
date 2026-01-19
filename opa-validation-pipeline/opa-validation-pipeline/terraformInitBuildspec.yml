@@ -1,0 +1,28 @@
+version: 0.2
+
+env:
+  variables:
+    TERRAFORM_VERSION: "${TERRAFORM_VERSION}"
+
+phases:
+  install:
+    commands:
+      - echo Installing Terraform $TERRAFORM_VERSION
+      - curl -o terraform.zip https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform version
+  pre_build:
+    commands:
+      - echo Logging in to AWS...
+      - aws --version
+      - echo "Backend configuration:"
+      - cat backend.conf
+  build:
+    commands:
+      - echo Initializing Terraform...
+      - terraform init -backend-config=backend.conf -input=false
+artifacts:
+  files:
+    - "**/*"
+    - backend.conf

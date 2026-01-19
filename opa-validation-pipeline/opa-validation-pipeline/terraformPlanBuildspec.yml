@@ -1,0 +1,62 @@
+version: 0.2
+
+env:
+  variables:
+    TERRAFORM_VERSION: "${TERRAFORM_VERSION}"
+    REGION: "${REGION}"
+
+phases:
+  install:
+    commands:
+      - echo "Installing Terraform..."
+      - curl -s -qL -o terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform --version
+      - echo "Installing dependencies..."
+      - if [ -f /etc/os-release ] && grep -q "ID=ubuntu" /etc/os-release; then apt-get update && apt-get install -y jq;
+        elif [ -f /etc/os-release ] && grep -q "ID=amzn" /etc/os-release; then yum install -y jq;
+        else echo "Unable to determine OS, attempting to install jq using available package manager";
+             which apt-get && apt-get update && apt-get install -y jq || which yum && yum install -y jq || echo "Failed to install jq";
+        fi
+  
+  pre_build:
+    commands:
+      - echo "Terraform plan started on `date`"
+      - echo "Verifying backend configuration..."
+      #- cat backend.conf
+      - echo "Initializing Terraform..."
+      #- terraform init -backend-config=backend.conf -input=false
+      - terraform init -input=false
+  
+  build:
+    commands:
+      - echo "Running Terraform plan..."
+      #- terraform plan -input=false -var-file=tfvars/terraform.tfvars -out=tfplan.binary
+      - terraform plan -input=false -out=tfplan.binary
+      - terraform show -json tfplan.binary > tfplan.json
+      - echo "Plan created successfully!"
+      - jq -r '.planned_values.root_module.resources[] | select(.type != "aws_s3_object") | "\(.type).\(.name)"' tfplan.json || echo "Failed to parse plan with jq"
+      
+  post_build:
+    commands:
+      - echo "Terraform plan completed on `date`"
+      - echo "Terraform plan output saved to tfplan.binary and tfplan.json"
+
+reports:
+  terraform-plan:
+    files:
+      - tfplan.json
+    base-directory: ./
+    file-format: JSON
+    
+artifacts:
+  files:
+    - tfplan.binary
+    - tfplan.json
+    #- backend.conf
+    - .terraform.lock.hcl
+    - .terraform/**/*
+    - "*.yml"
+    - "**/*.yml"
+  base-directory: ./

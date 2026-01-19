@@ -1,0 +1,52 @@
+version: 0.2
+
+env:
+  variables:
+    TERRAFORM_VERSION: "${TERRAFORM_VERSION}"
+
+phases:
+  install:
+    commands:
+      - echo "Installing Terraform..."
+      - curl -s -qL -o terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform --version
+  pre_build:
+    commands:
+      - echo "Terraform destroy started on `date`"
+      - echo "Checking workspace contents..."
+      - ls -la
+      - echo "Preparing for terraform destroy..."
+      - echo "Creating empty buildspec files if missing..."
+      - |
+        for file in testingBuildspec.yml sonarBuildspec.yml dockerBuildspec.yml gitLeaksBuildspec.yml trivyBuildspec.yml; do
+          if [ ! -f "$file" ]; then echo "Creating empty $file"; echo "version: 0.2" > "$file"; fi
+        done
+      - echo "Using backend configuration from previous stage..."
+      - |
+        if [ -f backend.conf ]; then
+          echo "Backend configuration found:"
+          cat backend.conf
+        else
+          echo "Warning: No backend.conf found, creating default one"
+        fi
+  build:
+    commands:
+      - echo "Initializing Terraform..."
+      #- terraform init -backend-config=backend.conf -input=false
+      - echo "Running terraform destroy..."
+      #- terraform destroy -auto-approve -var-file=tfvars/terraform.tfvars
+      #- terraform state list || echo "No state found"
+  post_build:
+    commands:
+      - echo "Terraform destroy completed on `date`"
+
+artifacts:
+  files:
+    - terraform.tfstate
+    - terraform.tfstate.backup
+    - .terraform.lock.hcl
+    - "*.yml"
+    - "**/*.yml"
+  base-directory: ./

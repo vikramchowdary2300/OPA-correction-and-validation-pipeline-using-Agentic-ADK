@@ -1,0 +1,11 @@
+# Self-Healing Agent Dependencies
+
+# Google ADK
+google-adk>=0.1.0
+
+# GitHub API (for creating PRs)
+requests>=2.31.0
+
+agentops
+
+

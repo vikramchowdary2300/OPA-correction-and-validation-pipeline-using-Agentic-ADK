@@ -1,0 +1,7 @@
+terraform init -backend-config=backend.conf
+
+terraform apply -var-file=tfvars/terraform.tfvars
+terraform apply -var-file="tfvars/terraform.tfvars" -auto-approve
+
+terraform destroy -var-file=tfvars/terraform.tfvars
+terraform destroy -var-file="tfvars/terraform.tfvars" -auto-approve
